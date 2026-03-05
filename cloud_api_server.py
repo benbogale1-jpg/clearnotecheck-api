@@ -156,6 +156,7 @@ def assemblyai_transcribe(audio_path, speaker_labels=False):
     transcript_request = {
         'audio_url': upload_url,
         'speaker_labels': speaker_labels,
+        'speech_model': 'universal-2',  # Required by AssemblyAI API
     }
 
     print(f"[API Server] Requesting transcription (speaker_labels={speaker_labels})...")
