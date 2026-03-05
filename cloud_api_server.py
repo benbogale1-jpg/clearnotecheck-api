@@ -3,11 +3,15 @@ ClearNoteCheck - Cloud API Server
 Lightweight Flask server for OpenAI-powered features (summaries, chat, transcription)
 
 This is the CLOUD version - uses AssemblyAI for transcription with real speaker diarization.
+Supports 2+ hour recordings via chunked upload.
 
 Endpoints:
     GET  /health                      - Health check
     POST /transcribe                  - Transcribe audio using AssemblyAI
     POST /transcribe-with-diarization - Transcribe with real voice-based speaker diarization
+    POST /upload/init                 - Initialize chunked upload session
+    POST /upload/chunk                - Upload a chunk
+    POST /upload/complete             - Complete upload and transcribe
     POST /summarize                   - Generate AI summary from transcript
     POST /executive-summary           - Generate Manager/Executive summary
     POST /chat                        - Chat with transcript
@@ -22,6 +26,8 @@ import json
 import time
 import tempfile
 import requests
+import uuid
+import shutil
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -29,6 +35,10 @@ from openai import OpenAI
 
 app = Flask(__name__)
 CORS(app)
+
+# Chunked upload storage
+UPLOAD_SESSIONS = {}  # session_id -> {chunks: [], created_at, total_chunks}
+CHUNK_DIR = tempfile.mkdtemp(prefix='clearnote_chunks_')
 
 # Initialize OpenAI client
 openai_api_key = os.environ.get('OPENAI_API_KEY')
@@ -78,6 +88,190 @@ def health():
         'diarization': 'real voice-based' if assemblyai_api_key else 'text-based fallback',
         'timestamp': datetime.now().isoformat()
     })
+
+
+# ============================================
+# Chunked Upload Endpoints (for 2+ hour recordings)
+# ============================================
+
+@app.route('/upload/init', methods=['POST'])
+def upload_init():
+    """
+    Initialize a chunked upload session.
+    Returns a session_id to use for uploading chunks.
+    """
+    try:
+        data = request.get_json() or {}
+        total_chunks = data.get('total_chunks', 0)
+        file_extension = data.get('extension', 'm4a')
+
+        session_id = str(uuid.uuid4())
+        session_dir = os.path.join(CHUNK_DIR, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+
+        UPLOAD_SESSIONS[session_id] = {
+            'chunks_received': set(),
+            'total_chunks': total_chunks,
+            'extension': file_extension,
+            'created_at': time.time(),
+            'dir': session_dir
+        }
+
+        print(f"[Chunked Upload] Session created: {session_id}, expecting {total_chunks} chunks")
+
+        return jsonify({
+            'success': True,
+            'session_id': session_id
+        })
+    except Exception as e:
+        print(f"[Chunked Upload] Init error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/upload/chunk', methods=['POST'])
+def upload_chunk():
+    """
+    Upload a single chunk.
+    Expects: session_id, chunk_index, chunk data (multipart)
+    """
+    try:
+        session_id = request.form.get('session_id')
+        chunk_index = int(request.form.get('chunk_index', 0))
+
+        if session_id not in UPLOAD_SESSIONS:
+            return jsonify({'success': False, 'error': 'Invalid session_id'}), 400
+
+        session = UPLOAD_SESSIONS[session_id]
+
+        if 'chunk' not in request.files:
+            return jsonify({'success': False, 'error': 'No chunk data'}), 400
+
+        chunk_file = request.files['chunk']
+        chunk_path = os.path.join(session['dir'], f'chunk_{chunk_index:04d}')
+        chunk_file.save(chunk_path)
+
+        session['chunks_received'].add(chunk_index)
+
+        print(f"[Chunked Upload] Session {session_id[:8]}: chunk {chunk_index + 1}/{session['total_chunks']} received")
+
+        return jsonify({
+            'success': True,
+            'chunks_received': len(session['chunks_received']),
+            'total_chunks': session['total_chunks']
+        })
+    except Exception as e:
+        print(f"[Chunked Upload] Chunk error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/upload/complete', methods=['POST'])
+def upload_complete():
+    """
+    Finalize upload, combine chunks, and start transcription.
+    """
+    try:
+        data = request.get_json() or {}
+        session_id = data.get('session_id')
+        speaker_labels = data.get('speaker_labels', True)
+
+        if session_id not in UPLOAD_SESSIONS:
+            return jsonify({'success': False, 'error': 'Invalid session_id'}), 400
+
+        session = UPLOAD_SESSIONS[session_id]
+
+        # Check all chunks received
+        if len(session['chunks_received']) < session['total_chunks']:
+            return jsonify({
+                'success': False,
+                'error': f"Missing chunks: got {len(session['chunks_received'])}/{session['total_chunks']}"
+            }), 400
+
+        print(f"[Chunked Upload] Session {session_id[:8]}: combining {session['total_chunks']} chunks...")
+
+        # Combine chunks into single file
+        ext = session.get('extension', 'm4a')
+        combined_path = os.path.join(session['dir'], f'combined.{ext}')
+
+        with open(combined_path, 'wb') as outfile:
+            for i in range(session['total_chunks']):
+                chunk_path = os.path.join(session['dir'], f'chunk_{i:04d}')
+                with open(chunk_path, 'rb') as chunk_file:
+                    outfile.write(chunk_file.read())
+
+        file_size = os.path.getsize(combined_path)
+        print(f"[Chunked Upload] Combined file size: {file_size / (1024*1024):.2f} MB")
+
+        # Transcribe with AssemblyAI
+        print("[Chunked Upload] Starting transcription...")
+        result = transcribe_with_assemblyai(combined_path, speaker_labels)
+
+        # Clean up
+        shutil.rmtree(session['dir'], ignore_errors=True)
+        del UPLOAD_SESSIONS[session_id]
+
+        # Process result same as regular endpoint
+        segments = []
+        diarization = []
+
+        if 'utterances' in result and result['utterances']:
+            for utt in result['utterances']:
+                segments.append({
+                    'text': utt['text'],
+                    'start': utt['start'] / 1000,
+                    'end': utt['end'] / 1000,
+                    'speaker': utt.get('speaker', 'A')
+                })
+                diarization.append({
+                    'speaker': utt.get('speaker', 'A'),
+                    'start': utt['start'] / 1000,
+                    'end': utt['end'] / 1000
+                })
+        elif 'words' in result and result['words']:
+            current_segment = {'text': '', 'start': None, 'end': None, 'speaker': 'A'}
+            for word in result['words']:
+                if current_segment['start'] is None:
+                    current_segment['start'] = word['start'] / 1000
+                current_segment['text'] += word['text'] + ' '
+                current_segment['end'] = word['end'] / 1000
+                if word['text'].endswith(('.', '?', '!')):
+                    segments.append({
+                        'text': current_segment['text'].strip(),
+                        'start': current_segment['start'],
+                        'end': current_segment['end'],
+                        'speaker': 'A'
+                    })
+                    current_segment = {'text': '', 'start': None, 'end': None, 'speaker': 'A'}
+            if current_segment['text'].strip():
+                segments.append({
+                    'text': current_segment['text'].strip(),
+                    'start': current_segment['start'],
+                    'end': current_segment['end'],
+                    'speaker': 'A'
+                })
+        else:
+            segments.append({
+                'text': result.get('text', ''),
+                'start': 0,
+                'end': result.get('audio_duration', 0),
+                'speaker': 'A'
+            })
+
+        return jsonify({
+            'success': True,
+            'transcription': result.get('text', ''),
+            'segments': segments,
+            'diarization': diarization,
+            'audio_duration': result.get('audio_duration', 0)
+        })
+
+    except Exception as e:
+        print(f"[Chunked Upload] Complete error: {str(e)}")
+        # Clean up on error
+        if session_id and session_id in UPLOAD_SESSIONS:
+            session = UPLOAD_SESSIONS[session_id]
+            shutil.rmtree(session.get('dir', ''), ignore_errors=True)
+            del UPLOAD_SESSIONS[session_id]
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/test-assemblyai', methods=['GET'])
