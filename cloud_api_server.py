@@ -1,22 +1,24 @@
 """
 ClearNoteCheck - Cloud API Server
-Lightweight Flask server for OpenAI-powered features (summaries, chat)
+Lightweight Flask server for OpenAI-powered features (summaries, chat, transcription)
 
-This is the CLOUD version - no Whisper, no heavy ML models.
-Transcription is handled separately (locally or via cloud ASR service).
+This is the CLOUD version - uses OpenAI Whisper API for transcription (no heavy local models).
 
 Endpoints:
-    GET  /health              - Health check
-    POST /summarize           - Generate AI summary from transcript
-    POST /executive-summary   - Generate Manager/Executive summary
-    POST /chat                - Chat with transcript
+    GET  /health                      - Health check
+    POST /transcribe                  - Transcribe audio using OpenAI Whisper
+    POST /transcribe-with-diarization - Transcribe with basic speaker diarization
+    POST /summarize                   - Generate AI summary from transcript
+    POST /executive-summary           - Generate Manager/Executive summary
+    POST /chat                        - Chat with transcript
 
 Environment variables:
-    OPENAI_API_KEY - Required: OpenAI API key for GPT
+    OPENAI_API_KEY - Required: OpenAI API key for GPT and Whisper
 """
 
 import os
 import json
+import tempfile
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -40,12 +42,14 @@ def root():
     """Root endpoint - API info"""
     return jsonify({
         'service': 'ClearNoteCheck Cloud API',
-        'version': '1.0.0',
+        'version': '2.0.0',
         'status': 'running',
         'endpoints': [
             'GET  /health',
+            'POST /transcribe',
+            'POST /transcribe-with-diarization',
             'POST /summarize',
-            'POST /executive-summary', 
+            'POST /executive-summary',
             'POST /chat'
         ]
     })
@@ -58,8 +62,200 @@ def health():
         'status': 'healthy',
         'service': 'ClearNoteCheck Cloud API',
         'openai': 'configured' if openai_client else 'not configured',
+        'whisper': 'available' if openai_client else 'not available',
         'timestamp': datetime.now().isoformat()
     })
+
+
+@app.route('/transcribe', methods=['POST'])
+def transcribe():
+    """
+    Transcribe audio file using OpenAI Whisper API
+
+    Request: multipart/form-data with 'audio' file
+    Response: JSON with transcription segments
+    """
+    try:
+        if not openai_client:
+            return jsonify({
+                'success': False,
+                'error': 'OpenAI API not configured'
+            }), 503
+
+        if 'audio' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No audio file provided'
+            }), 400
+
+        audio_file = request.files['audio']
+
+        # Save to temp file (OpenAI API needs a file path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp:
+            audio_file.save(temp.name)
+            temp_path = temp.name
+
+        print(f"[API Server] Transcribing with OpenAI Whisper: {audio_file.filename}")
+
+        # Use OpenAI Whisper API with timestamps
+        with open(temp_path, 'rb') as f:
+            response = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"]
+            )
+
+        # Clean up temp file
+        os.unlink(temp_path)
+
+        # Extract segments from response
+        segments = []
+        if hasattr(response, 'segments') and response.segments:
+            for seg in response.segments:
+                segments.append({
+                    'text': seg.text.strip(),
+                    'startTime': seg.start,
+                    'endTime': seg.end,
+                    'confidence': 0.95
+                })
+        else:
+            # Fallback: single segment
+            segments.append({
+                'text': response.text.strip(),
+                'startTime': 0,
+                'endTime': 0,
+                'confidence': 0.95
+            })
+
+        print(f"[API Server] Transcription complete: {len(segments)} segments")
+
+        return jsonify({
+            'success': True,
+            'transcription': response.text.strip(),
+            'segments': segments,
+            'language': getattr(response, 'language', 'en')
+        })
+
+    except Exception as e:
+        print(f"[API Server] Transcription error: {str(e)}")
+        # Clean up temp file if it exists
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/transcribe-with-diarization', methods=['POST'])
+def transcribe_with_diarization():
+    """
+    Transcribe with basic speaker diarization using OpenAI Whisper API
+
+    Note: OpenAI Whisper doesn't have built-in diarization, so we use
+    a simple pause-based approach to estimate speaker changes.
+    """
+    try:
+        if not openai_client:
+            return jsonify({
+                'success': False,
+                'error': 'OpenAI API not configured'
+            }), 503
+
+        if 'audio' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No audio file provided'
+            }), 400
+
+        audio_file = request.files['audio']
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp:
+            audio_file.save(temp.name)
+            temp_path = temp.name
+
+        print(f"[API Server] Transcribing with diarization: {audio_file.filename}")
+
+        # Use OpenAI Whisper API
+        with open(temp_path, 'rb') as f:
+            response = openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"]
+            )
+
+        # Clean up temp file
+        os.unlink(temp_path)
+
+        # Extract segments and apply basic diarization
+        segments = []
+        diarization = []
+        current_speaker = 0
+        last_end = 0
+
+        if hasattr(response, 'segments') and response.segments:
+            for seg in response.segments:
+                # Simple pause-based speaker detection
+                # If gap > 1.5 seconds, potentially new speaker
+                if seg.start - last_end > 1.5:
+                    current_speaker = (current_speaker + 1) % 4
+
+                segments.append({
+                    'text': seg.text.strip(),
+                    'startTime': seg.start,
+                    'endTime': seg.end,
+                    'confidence': 0.95,
+                    'speaker': current_speaker
+                })
+
+                diarization.append({
+                    'speaker': current_speaker,
+                    'startTime': seg.start,
+                    'endTime': seg.end
+                })
+
+                last_end = seg.end
+        else:
+            # Fallback: single segment, speaker 0
+            segments.append({
+                'text': response.text.strip(),
+                'startTime': 0,
+                'endTime': 0,
+                'confidence': 0.95,
+                'speaker': 0
+            })
+            diarization.append({
+                'speaker': 0,
+                'startTime': 0,
+                'endTime': 0
+            })
+
+        num_speakers = len(set(seg['speaker'] for seg in segments))
+        print(f"[API Server] Transcription complete: {len(segments)} segments, {num_speakers} speakers (basic diarization)")
+
+        return jsonify({
+            'success': True,
+            'transcription': response.text.strip(),
+            'segments': segments,
+            'diarization': diarization,
+            'language': getattr(response, 'language', 'en'),
+            'numSpeakers': num_speakers
+        })
+
+    except Exception as e:
+        print(f"[API Server] Transcription error: {str(e)}")
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/summarize', methods=['POST'])
@@ -298,12 +494,15 @@ def chat():
 
 if __name__ == '__main__':
     print("\n" + "="*50)
-    print("ClearNoteCheck Cloud API Server")
+    print("ClearNoteCheck Cloud API Server v2.0")
     print("="*50)
     print(f"OpenAI: {'Configured' if openai_client else 'NOT CONFIGURED'}")
+    print(f"Whisper: {'Available (OpenAI API)' if openai_client else 'NOT AVAILABLE'}")
     print("Endpoints:")
     print("  GET  /              - API info")
     print("  GET  /health        - Health check")
+    print("  POST /transcribe    - Transcribe audio (Whisper)")
+    print("  POST /transcribe-with-diarization - Transcribe + speakers")
     print("  POST /summarize     - Generate AI summary")
     print("  POST /executive-summary - Executive summary")
     print("  POST /chat          - Chat with transcript")
