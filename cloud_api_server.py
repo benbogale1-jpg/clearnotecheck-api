@@ -313,7 +313,12 @@ def transcribe_with_diarization():
     just like pyannote did locally. Each segment has accurate timestamps
     for audio sync and real speaker identification.
     """
+    temp_path = None
     try:
+        print(f"[API Server] /transcribe-with-diarization called")
+        print(f"[API Server] AssemblyAI configured: {bool(assemblyai_api_key)}")
+        print(f"[API Server] Request files: {list(request.files.keys())}")
+
         if not assemblyai_api_key:
             return jsonify({
                 'success': False,
@@ -323,14 +328,22 @@ def transcribe_with_diarization():
         if 'audio' not in request.files:
             return jsonify({
                 'success': False,
-                'error': 'No audio file provided'
+                'error': f'No audio file provided. Got files: {list(request.files.keys())}'
             }), 400
 
         audio_file = request.files['audio']
+        print(f"[API Server] Audio file received: {audio_file.filename}, content_type: {audio_file.content_type}")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp:
             audio_file.save(temp.name)
             temp_path = temp.name
+
+        # Check file size
+        file_size = os.path.getsize(temp_path)
+        print(f"[API Server] Saved temp file: {temp_path}, size: {file_size} bytes")
+
+        if file_size == 0:
+            raise Exception("Audio file is empty (0 bytes)")
 
         print(f"[API Server] Transcribing with speaker diarization: {audio_file.filename}")
 
