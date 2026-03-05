@@ -153,10 +153,10 @@ def transcribe():
 @app.route('/transcribe-with-diarization', methods=['POST'])
 def transcribe_with_diarization():
     """
-    Transcribe with basic speaker diarization using OpenAI Whisper API
+    Transcribe with AI-powered speaker diarization using OpenAI Whisper + GPT
 
-    Note: OpenAI Whisper doesn't have built-in diarization, so we use
-    a simple pause-based approach to estimate speaker changes.
+    Uses Whisper for transcription, then GPT to identify speaker changes
+    based on conversation context, questions/answers, and dialogue patterns.
     """
     try:
         if not openai_client:
@@ -191,51 +191,103 @@ def transcribe_with_diarization():
         # Clean up temp file
         os.unlink(temp_path)
 
-        # Extract segments and apply basic diarization
-        segments = []
-        diarization = []
-        current_speaker = 0
-        last_end = 0
-
+        # Extract raw segments
+        raw_segments = []
         if hasattr(response, 'segments') and response.segments:
             for seg in response.segments:
-                # Simple pause-based speaker detection
-                # If gap > 1.5 seconds, potentially new speaker
-                if seg.start - last_end > 1.5:
-                    current_speaker = (current_speaker + 1) % 4
-
-                segments.append({
+                raw_segments.append({
                     'text': seg.text.strip(),
-                    'startTime': seg.start,
-                    'endTime': seg.end,
-                    'confidence': 0.95,
-                    'speaker': current_speaker
-                })
-
-                diarization.append({
-                    'speaker': current_speaker,
                     'startTime': seg.start,
                     'endTime': seg.end
                 })
-
-                last_end = seg.end
         else:
-            # Fallback: single segment, speaker 0
-            segments.append({
+            raw_segments.append({
                 'text': response.text.strip(),
-                'startTime': 0,
-                'endTime': 0,
-                'confidence': 0.95,
-                'speaker': 0
-            })
-            diarization.append({
-                'speaker': 0,
                 'startTime': 0,
                 'endTime': 0
             })
 
+        # Use GPT to identify speakers
+        print(f"[API Server] Using GPT to identify speakers in {len(raw_segments)} segments...")
+
+        # Build numbered segment list for GPT
+        segment_list = "\n".join([f"{i}: {seg['text']}" for i, seg in enumerate(raw_segments)])
+
+        gpt_response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a speaker diarization assistant. Given a list of transcript segments, identify which speaker said each segment.
+
+Analyze the conversation for:
+- Questions vs answers (different speakers)
+- "I" vs "you" references
+- Topic/perspective changes
+- Conversational turn-taking patterns
+- Greetings and responses
+
+Output ONLY a JSON array of speaker numbers (0, 1, 2, etc.) corresponding to each segment index.
+Example: [0, 1, 0, 1, 2, 0] means segment 0 is speaker 0, segment 1 is speaker 1, etc.
+
+Use the minimum number of speakers that makes sense for the conversation.
+If it's clearly one person (monologue, no dialogue patterns), use [0, 0, 0, ...]."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Identify speakers for each segment:\n\n{segment_list}"
+                }
+            ],
+            temperature=0.1,
+            max_tokens=1024
+        )
+
+        # Parse GPT response
+        speaker_text = gpt_response.choices[0].message.content.strip()
+        try:
+            # Remove markdown if present
+            if speaker_text.startswith('```'):
+                speaker_text = speaker_text.split('```')[1]
+                if speaker_text.startswith('json'):
+                    speaker_text = speaker_text[4:]
+            speaker_text = speaker_text.strip()
+            speaker_assignments = json.loads(speaker_text)
+        except json.JSONDecodeError:
+            print(f"[API Server] Could not parse GPT speaker response, using fallback")
+            # Fallback to pause-based
+            speaker_assignments = []
+            current_speaker = 0
+            last_end = 0
+            for seg in raw_segments:
+                if seg['startTime'] - last_end > 1.5:
+                    current_speaker = (current_speaker + 1) % 4
+                speaker_assignments.append(current_speaker)
+                last_end = seg['endTime']
+
+        # Ensure we have assignments for all segments
+        while len(speaker_assignments) < len(raw_segments):
+            speaker_assignments.append(0)
+
+        # Build final segments with speaker info
+        segments = []
+        diarization = []
+        for i, seg in enumerate(raw_segments):
+            speaker = speaker_assignments[i] if i < len(speaker_assignments) else 0
+            segments.append({
+                'text': seg['text'],
+                'startTime': seg['startTime'],
+                'endTime': seg['endTime'],
+                'confidence': 0.95,
+                'speaker': speaker
+            })
+            diarization.append({
+                'speaker': speaker,
+                'startTime': seg['startTime'],
+                'endTime': seg['endTime']
+            })
+
         num_speakers = len(set(seg['speaker'] for seg in segments))
-        print(f"[API Server] Transcription complete: {len(segments)} segments, {num_speakers} speakers (basic diarization)")
+        print(f"[API Server] Transcription complete: {len(segments)} segments, {num_speakers} speakers (GPT diarization)")
 
         return jsonify({
             'success': True,
