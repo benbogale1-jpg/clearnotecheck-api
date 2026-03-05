@@ -184,7 +184,7 @@ def assemblyai_transcribe(audio_path, speaker_labels=False):
 
     # Step 3: Poll for completion (with timeout)
     polling_url = f'https://api.assemblyai.com/v2/transcript/{transcript_id}'
-    max_polls = 60  # Max 2 minutes (60 * 2 seconds)
+    max_polls = 300  # Max 10 minutes (300 * 2 seconds) for longer recordings
     polls = 0
 
     while polls < max_polls:
@@ -208,7 +208,7 @@ def assemblyai_transcribe(audio_path, speaker_labels=False):
             print(f"[API Server] Polling error: {str(e)}")
             raise
 
-    raise Exception("Transcription timed out after 2 minutes")
+    raise Exception("Transcription timed out after 10 minutes")
 
 
 @app.route('/transcribe', methods=['POST'])
