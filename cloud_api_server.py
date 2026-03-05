@@ -74,9 +74,47 @@ def health():
         'service': 'ClearNoteCheck Cloud API',
         'openai': 'configured' if openai_client else 'not configured',
         'assemblyai': 'configured' if assemblyai_api_key else 'not configured',
+        'assemblyai_key_prefix': assemblyai_api_key[:10] + '...' if assemblyai_api_key else 'not set',
         'diarization': 'real voice-based' if assemblyai_api_key else 'text-based fallback',
         'timestamp': datetime.now().isoformat()
     })
+
+
+@app.route('/test-assemblyai', methods=['GET'])
+def test_assemblyai():
+    """Test AssemblyAI connection"""
+    if not assemblyai_api_key:
+        return jsonify({
+            'success': False,
+            'error': 'ASSEMBLYAI_API_KEY not configured'
+        }), 503
+
+    try:
+        # Test the API key by checking account info
+        response = requests.get(
+            'https://api.assemblyai.com/v2/transcript',
+            headers={'authorization': assemblyai_api_key},
+            params={'limit': 1}
+        )
+
+        if response.status_code == 401:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid AssemblyAI API key (401 Unauthorized)',
+                'key_prefix': assemblyai_api_key[:10] + '...'
+            }), 401
+
+        return jsonify({
+            'success': True,
+            'message': 'AssemblyAI API key is valid',
+            'status_code': response.status_code,
+            'key_prefix': assemblyai_api_key[:10] + '...'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 def assemblyai_transcribe(audio_path, speaker_labels=False):
