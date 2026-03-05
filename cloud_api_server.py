@@ -91,14 +91,28 @@ def assemblyai_transcribe(audio_path, speaker_labels=False):
 
     # Step 1: Upload the audio file
     print("[API Server] Uploading audio to AssemblyAI...")
-    with open(audio_path, 'rb') as f:
-        upload_response = requests.post(
-            'https://api.assemblyai.com/v2/upload',
-            headers={'authorization': assemblyai_api_key},
-            data=f
-        )
-    upload_url = upload_response.json()['upload_url']
-    print(f"[API Server] Audio uploaded: {upload_url[:50]}...")
+    try:
+        with open(audio_path, 'rb') as f:
+            upload_response = requests.post(
+                'https://api.assemblyai.com/v2/upload',
+                headers={'authorization': assemblyai_api_key},
+                data=f
+            )
+
+        print(f"[API Server] Upload response status: {upload_response.status_code}")
+        upload_data = upload_response.json()
+
+        if 'error' in upload_data:
+            raise Exception(f"AssemblyAI upload error: {upload_data['error']}")
+
+        if 'upload_url' not in upload_data:
+            raise Exception(f"AssemblyAI upload failed: {upload_data}")
+
+        upload_url = upload_data['upload_url']
+        print(f"[API Server] Audio uploaded successfully")
+    except Exception as e:
+        print(f"[API Server] Upload error: {str(e)}")
+        raise
 
     # Step 2: Request transcription
     transcript_request = {
@@ -107,28 +121,55 @@ def assemblyai_transcribe(audio_path, speaker_labels=False):
     }
 
     print(f"[API Server] Requesting transcription (speaker_labels={speaker_labels})...")
-    transcript_response = requests.post(
-        'https://api.assemblyai.com/v2/transcript',
-        headers=headers,
-        json=transcript_request
-    )
-    transcript_id = transcript_response.json()['id']
-    print(f"[API Server] Transcription started: {transcript_id}")
+    try:
+        transcript_response = requests.post(
+            'https://api.assemblyai.com/v2/transcript',
+            headers=headers,
+            json=transcript_request
+        )
 
-    # Step 3: Poll for completion
+        print(f"[API Server] Transcript response status: {transcript_response.status_code}")
+        transcript_data = transcript_response.json()
+
+        if 'error' in transcript_data:
+            raise Exception(f"AssemblyAI transcript error: {transcript_data['error']}")
+
+        if 'id' not in transcript_data:
+            raise Exception(f"AssemblyAI transcript failed: {transcript_data}")
+
+        transcript_id = transcript_data['id']
+        print(f"[API Server] Transcription started: {transcript_id}")
+    except Exception as e:
+        print(f"[API Server] Transcript request error: {str(e)}")
+        raise
+
+    # Step 3: Poll for completion (with timeout)
     polling_url = f'https://api.assemblyai.com/v2/transcript/{transcript_id}'
-    while True:
-        poll_response = requests.get(polling_url, headers=headers)
-        status = poll_response.json()['status']
+    max_polls = 60  # Max 2 minutes (60 * 2 seconds)
+    polls = 0
 
-        if status == 'completed':
-            print("[API Server] Transcription completed!")
-            return poll_response.json()
-        elif status == 'error':
-            raise Exception(f"AssemblyAI error: {poll_response.json().get('error', 'Unknown error')}")
+    while polls < max_polls:
+        try:
+            poll_response = requests.get(polling_url, headers=headers)
+            poll_data = poll_response.json()
+            status = poll_data.get('status', 'unknown')
 
-        print(f"[API Server] Status: {status}, waiting...")
-        time.sleep(2)
+            if status == 'completed':
+                print("[API Server] Transcription completed!")
+                return poll_data
+            elif status == 'error':
+                error_msg = poll_data.get('error', 'Unknown error')
+                print(f"[API Server] AssemblyAI error: {error_msg}")
+                raise Exception(f"AssemblyAI transcription error: {error_msg}")
+
+            print(f"[API Server] Status: {status}, waiting... ({polls + 1}/{max_polls})")
+            time.sleep(2)
+            polls += 1
+        except requests.exceptions.RequestException as e:
+            print(f"[API Server] Polling error: {str(e)}")
+            raise
+
+    raise Exception("Transcription timed out after 2 minutes")
 
 
 @app.route('/transcribe', methods=['POST'])
