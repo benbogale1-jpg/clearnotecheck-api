@@ -2,23 +2,26 @@
 ClearNoteCheck - Cloud API Server
 Lightweight Flask server for OpenAI-powered features (summaries, chat, transcription)
 
-This is the CLOUD version - uses OpenAI Whisper API for transcription (no heavy local models).
+This is the CLOUD version - uses AssemblyAI for transcription with real speaker diarization.
 
 Endpoints:
     GET  /health                      - Health check
-    POST /transcribe                  - Transcribe audio using OpenAI Whisper
-    POST /transcribe-with-diarization - Transcribe with basic speaker diarization
+    POST /transcribe                  - Transcribe audio using AssemblyAI
+    POST /transcribe-with-diarization - Transcribe with real voice-based speaker diarization
     POST /summarize                   - Generate AI summary from transcript
     POST /executive-summary           - Generate Manager/Executive summary
     POST /chat                        - Chat with transcript
 
 Environment variables:
-    OPENAI_API_KEY - Required: OpenAI API key for GPT and Whisper
+    OPENAI_API_KEY - Required: OpenAI API key for GPT
+    ASSEMBLYAI_API_KEY - Required: AssemblyAI API key for transcription + diarization
 """
 
 import os
 import json
+import time
 import tempfile
+import requests
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -36,14 +39,22 @@ else:
     openai_client = OpenAI(api_key=openai_api_key)
     print("[API Server] OpenAI client initialized!")
 
+# Initialize AssemblyAI
+assemblyai_api_key = os.environ.get('ASSEMBLYAI_API_KEY')
+if not assemblyai_api_key:
+    print("[API Server] WARNING: ASSEMBLYAI_API_KEY not set - diarization will be limited!")
+else:
+    print("[API Server] AssemblyAI configured for speaker diarization!")
+
 
 @app.route('/', methods=['GET'])
 def root():
     """Root endpoint - API info"""
     return jsonify({
         'service': 'ClearNoteCheck Cloud API',
-        'version': '2.0.0',
+        'version': '3.0.0',
         'status': 'running',
+        'diarization': 'real voice-based (AssemblyAI)' if assemblyai_api_key else 'not configured',
         'endpoints': [
             'GET  /health',
             'POST /transcribe',
@@ -62,24 +73,77 @@ def health():
         'status': 'healthy',
         'service': 'ClearNoteCheck Cloud API',
         'openai': 'configured' if openai_client else 'not configured',
-        'whisper': 'available' if openai_client else 'not available',
+        'assemblyai': 'configured' if assemblyai_api_key else 'not configured',
+        'diarization': 'real voice-based' if assemblyai_api_key else 'text-based fallback',
         'timestamp': datetime.now().isoformat()
     })
+
+
+def assemblyai_transcribe(audio_path, speaker_labels=False):
+    """
+    Transcribe audio using AssemblyAI with optional speaker diarization.
+    Returns transcript with accurate timestamps and speaker labels.
+    """
+    headers = {
+        'authorization': assemblyai_api_key,
+        'content-type': 'application/json'
+    }
+
+    # Step 1: Upload the audio file
+    print("[API Server] Uploading audio to AssemblyAI...")
+    with open(audio_path, 'rb') as f:
+        upload_response = requests.post(
+            'https://api.assemblyai.com/v2/upload',
+            headers={'authorization': assemblyai_api_key},
+            data=f
+        )
+    upload_url = upload_response.json()['upload_url']
+    print(f"[API Server] Audio uploaded: {upload_url[:50]}...")
+
+    # Step 2: Request transcription
+    transcript_request = {
+        'audio_url': upload_url,
+        'speaker_labels': speaker_labels,
+    }
+
+    print(f"[API Server] Requesting transcription (speaker_labels={speaker_labels})...")
+    transcript_response = requests.post(
+        'https://api.assemblyai.com/v2/transcript',
+        headers=headers,
+        json=transcript_request
+    )
+    transcript_id = transcript_response.json()['id']
+    print(f"[API Server] Transcription started: {transcript_id}")
+
+    # Step 3: Poll for completion
+    polling_url = f'https://api.assemblyai.com/v2/transcript/{transcript_id}'
+    while True:
+        poll_response = requests.get(polling_url, headers=headers)
+        status = poll_response.json()['status']
+
+        if status == 'completed':
+            print("[API Server] Transcription completed!")
+            return poll_response.json()
+        elif status == 'error':
+            raise Exception(f"AssemblyAI error: {poll_response.json().get('error', 'Unknown error')}")
+
+        print(f"[API Server] Status: {status}, waiting...")
+        time.sleep(2)
 
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     """
-    Transcribe audio file using OpenAI Whisper API
+    Transcribe audio file using AssemblyAI
 
     Request: multipart/form-data with 'audio' file
-    Response: JSON with transcription segments
+    Response: JSON with transcription segments and timestamps
     """
     try:
-        if not openai_client:
+        if not assemblyai_api_key:
             return jsonify({
                 'success': False,
-                'error': 'OpenAI API not configured'
+                'error': 'AssemblyAI API not configured'
             }), 503
 
         if 'audio' not in request.files:
@@ -90,56 +154,67 @@ def transcribe():
 
         audio_file = request.files['audio']
 
-        # Save to temp file (OpenAI API needs a file path)
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp:
             audio_file.save(temp.name)
             temp_path = temp.name
 
-        print(f"[API Server] Transcribing with OpenAI Whisper: {audio_file.filename}")
+        print(f"[API Server] Transcribing: {audio_file.filename}")
 
-        # Use OpenAI Whisper API with timestamps
-        with open(temp_path, 'rb') as f:
-            response = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"]
-            )
+        # Use AssemblyAI for transcription
+        result = assemblyai_transcribe(temp_path, speaker_labels=False)
 
         # Clean up temp file
         os.unlink(temp_path)
 
-        # Extract segments from response
+        # Extract segments with timestamps
         segments = []
-        if hasattr(response, 'segments') and response.segments:
-            for seg in response.segments:
+        if 'words' in result and result['words']:
+            # Group words into sentences/segments
+            current_segment = {'text': '', 'startTime': None, 'endTime': None}
+            for word in result['words']:
+                if current_segment['startTime'] is None:
+                    current_segment['startTime'] = word['start'] / 1000.0  # ms to seconds
+
+                current_segment['text'] += word['text'] + ' '
+                current_segment['endTime'] = word['end'] / 1000.0
+
+                # End segment on sentence-ending punctuation
+                if word['text'].rstrip()[-1:] in '.!?':
+                    segments.append({
+                        'text': current_segment['text'].strip(),
+                        'startTime': current_segment['startTime'],
+                        'endTime': current_segment['endTime'],
+                        'confidence': result.get('confidence', 0.95)
+                    })
+                    current_segment = {'text': '', 'startTime': None, 'endTime': None}
+
+            # Add remaining text as final segment
+            if current_segment['text'].strip():
                 segments.append({
-                    'text': seg.text.strip(),
-                    'startTime': seg.start,
-                    'endTime': seg.end,
-                    'confidence': 0.95
+                    'text': current_segment['text'].strip(),
+                    'startTime': current_segment['startTime'],
+                    'endTime': current_segment['endTime'],
+                    'confidence': result.get('confidence', 0.95)
                 })
         else:
-            # Fallback: single segment
             segments.append({
-                'text': response.text.strip(),
+                'text': result.get('text', '').strip(),
                 'startTime': 0,
                 'endTime': 0,
-                'confidence': 0.95
+                'confidence': result.get('confidence', 0.95)
             })
 
         print(f"[API Server] Transcription complete: {len(segments)} segments")
 
         return jsonify({
             'success': True,
-            'transcription': response.text.strip(),
+            'transcription': result.get('text', '').strip(),
             'segments': segments,
-            'language': getattr(response, 'language', 'en')
+            'language': result.get('language_code', 'en')
         })
 
     except Exception as e:
         print(f"[API Server] Transcription error: {str(e)}")
-        # Clean up temp file if it exists
         try:
             os.unlink(temp_path)
         except:
@@ -153,16 +228,17 @@ def transcribe():
 @app.route('/transcribe-with-diarization', methods=['POST'])
 def transcribe_with_diarization():
     """
-    Transcribe with AI-powered speaker diarization using OpenAI Whisper + GPT
+    Transcribe with REAL voice-based speaker diarization using AssemblyAI.
 
-    Uses Whisper for transcription, then GPT to identify speaker changes
-    based on conversation context, questions/answers, and dialogue patterns.
+    This analyzes actual audio waveforms to identify different speakers,
+    just like pyannote did locally. Each segment has accurate timestamps
+    for audio sync and real speaker identification.
     """
     try:
-        if not openai_client:
+        if not assemblyai_api_key:
             return jsonify({
                 'success': False,
-                'error': 'OpenAI API not configured'
+                'error': 'AssemblyAI API not configured. Add ASSEMBLYAI_API_KEY to Railway variables.'
             }), 503
 
         if 'audio' not in request.files:
@@ -177,124 +253,65 @@ def transcribe_with_diarization():
             audio_file.save(temp.name)
             temp_path = temp.name
 
-        print(f"[API Server] Transcribing with diarization: {audio_file.filename}")
+        print(f"[API Server] Transcribing with speaker diarization: {audio_file.filename}")
 
-        # Use OpenAI Whisper API
-        with open(temp_path, 'rb') as f:
-            response = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"]
-            )
+        # Use AssemblyAI with speaker labels enabled
+        result = assemblyai_transcribe(temp_path, speaker_labels=True)
 
         # Clean up temp file
         os.unlink(temp_path)
 
-        # Extract raw segments
-        raw_segments = []
-        if hasattr(response, 'segments') and response.segments:
-            for seg in response.segments:
-                raw_segments.append({
-                    'text': seg.text.strip(),
-                    'startTime': seg.start,
-                    'endTime': seg.end
+        # Extract utterances with speaker labels
+        segments = []
+        diarization = []
+
+        if 'utterances' in result and result['utterances']:
+            # AssemblyAI returns utterances grouped by speaker
+            for utterance in result['utterances']:
+                speaker_label = utterance.get('speaker', 'A')
+                # Convert speaker letter to number (A=0, B=1, C=2, etc.)
+                speaker_num = ord(speaker_label) - ord('A') if isinstance(speaker_label, str) else int(speaker_label)
+
+                start_time = utterance['start'] / 1000.0  # ms to seconds
+                end_time = utterance['end'] / 1000.0
+
+                segments.append({
+                    'text': utterance['text'].strip(),
+                    'startTime': start_time,
+                    'endTime': end_time,
+                    'confidence': utterance.get('confidence', 0.95),
+                    'speaker': speaker_num
+                })
+
+                diarization.append({
+                    'speaker': speaker_num,
+                    'startTime': start_time,
+                    'endTime': end_time
                 })
         else:
-            raw_segments.append({
-                'text': response.text.strip(),
+            # Fallback if no utterances
+            segments.append({
+                'text': result.get('text', '').strip(),
+                'startTime': 0,
+                'endTime': 0,
+                'confidence': result.get('confidence', 0.95),
+                'speaker': 0
+            })
+            diarization.append({
+                'speaker': 0,
                 'startTime': 0,
                 'endTime': 0
             })
 
-        # Use GPT to identify speakers
-        print(f"[API Server] Using GPT to identify speakers in {len(raw_segments)} segments...")
-
-        # Build numbered segment list for GPT
-        segment_list = "\n".join([f"{i}: {seg['text']}" for i, seg in enumerate(raw_segments)])
-
-        gpt_response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a speaker diarization assistant. Given a list of transcript segments, identify which speaker said each segment.
-
-Analyze the conversation for:
-- Questions vs answers (different speakers)
-- "I" vs "you" references
-- Topic/perspective changes
-- Conversational turn-taking patterns
-- Greetings and responses
-
-Output ONLY a JSON array of speaker numbers (0, 1, 2, etc.) corresponding to each segment index.
-Example: [0, 1, 0, 1, 2, 0] means segment 0 is speaker 0, segment 1 is speaker 1, etc.
-
-Use the minimum number of speakers that makes sense for the conversation.
-If it's clearly one person (monologue, no dialogue patterns), use [0, 0, 0, ...]."""
-                },
-                {
-                    "role": "user",
-                    "content": f"Identify speakers for each segment:\n\n{segment_list}"
-                }
-            ],
-            temperature=0.1,
-            max_tokens=1024
-        )
-
-        # Parse GPT response
-        speaker_text = gpt_response.choices[0].message.content.strip()
-        try:
-            # Remove markdown if present
-            if speaker_text.startswith('```'):
-                speaker_text = speaker_text.split('```')[1]
-                if speaker_text.startswith('json'):
-                    speaker_text = speaker_text[4:]
-            speaker_text = speaker_text.strip()
-            speaker_assignments = json.loads(speaker_text)
-        except json.JSONDecodeError:
-            print(f"[API Server] Could not parse GPT speaker response, using fallback")
-            # Fallback to pause-based
-            speaker_assignments = []
-            current_speaker = 0
-            last_end = 0
-            for seg in raw_segments:
-                if seg['startTime'] - last_end > 1.5:
-                    current_speaker = (current_speaker + 1) % 4
-                speaker_assignments.append(current_speaker)
-                last_end = seg['endTime']
-
-        # Ensure we have assignments for all segments
-        while len(speaker_assignments) < len(raw_segments):
-            speaker_assignments.append(0)
-
-        # Build final segments with speaker info
-        segments = []
-        diarization = []
-        for i, seg in enumerate(raw_segments):
-            speaker = speaker_assignments[i] if i < len(speaker_assignments) else 0
-            segments.append({
-                'text': seg['text'],
-                'startTime': seg['startTime'],
-                'endTime': seg['endTime'],
-                'confidence': 0.95,
-                'speaker': speaker
-            })
-            diarization.append({
-                'speaker': speaker,
-                'startTime': seg['startTime'],
-                'endTime': seg['endTime']
-            })
-
         num_speakers = len(set(seg['speaker'] for seg in segments))
-        print(f"[API Server] Transcription complete: {len(segments)} segments, {num_speakers} speakers (GPT diarization)")
+        print(f"[API Server] Transcription complete: {len(segments)} segments, {num_speakers} speakers (voice-based diarization)")
 
         return jsonify({
             'success': True,
-            'transcription': response.text.strip(),
+            'transcription': result.get('text', '').strip(),
             'segments': segments,
             'diarization': diarization,
-            'language': getattr(response, 'language', 'en'),
+            'language': result.get('language_code', 'en'),
             'numSpeakers': num_speakers
         })
 
@@ -546,15 +563,15 @@ def chat():
 
 if __name__ == '__main__':
     print("\n" + "="*50)
-    print("ClearNoteCheck Cloud API Server v2.0")
+    print("ClearNoteCheck Cloud API Server v3.0")
     print("="*50)
     print(f"OpenAI: {'Configured' if openai_client else 'NOT CONFIGURED'}")
-    print(f"Whisper: {'Available (OpenAI API)' if openai_client else 'NOT AVAILABLE'}")
+    print(f"AssemblyAI: {'Configured (real voice diarization)' if assemblyai_api_key else 'NOT CONFIGURED'}")
     print("Endpoints:")
     print("  GET  /              - API info")
     print("  GET  /health        - Health check")
-    print("  POST /transcribe    - Transcribe audio (Whisper)")
-    print("  POST /transcribe-with-diarization - Transcribe + speakers")
+    print("  POST /transcribe    - Transcribe audio (AssemblyAI)")
+    print("  POST /transcribe-with-diarization - Transcribe + real speaker ID")
     print("  POST /summarize     - Generate AI summary")
     print("  POST /executive-summary - Executive summary")
     print("  POST /chat          - Chat with transcript")
