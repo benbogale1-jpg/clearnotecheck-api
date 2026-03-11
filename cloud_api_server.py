@@ -849,76 +849,79 @@ def study_guide():
             messages=[
                 {
                     "role": "system",
-                    "content": f"""You are an expert study guide creator for college students. Your job is to transform raw lecture transcripts into comprehensive, well-organized study materials that help students learn effectively and prepare for exams.
+                    "content": f"""You are an expert professor and study guide creator. Your job is to transform raw lecture transcripts into COMPREHENSIVE, DETAILED study materials — the kind a top student would create after spending hours reviewing a lecture. Aim for the equivalent of 5-10 handwritten pages of study notes.
 
 {f"Subject area: {subject}. {subject_context}" if subject_context else ""}
 
-Given a lecture transcript, produce a JSON response with these sections:
+Given a lecture transcript, produce a JSON response. BE THOROUGH — write detailed explanations, not summaries. Each section should contain substantial content:
 
 {{
-    "overview": "A clear 3-5 sentence summary of what the lecture covered, written in student-friendly language. Explain the big picture and why this material matters.",
+    "overview": "A detailed 5-8 sentence overview of the lecture. Explain: (1) What the main topic was, (2) Why it matters in the broader context of the course, (3) The key arguments or ideas presented, (4) How different topics connected to each other, (5) What the professor emphasized as most important. This should give a student who missed class a solid understanding of what was covered.",
 
     "keyConcepts": [
         {{
             "concept": "Name of the concept",
-            "explanation": "Clear, detailed explanation a student can understand. Use analogies and examples where helpful.",
-            "importance": "Why this concept matters — is it foundational? Will it be on the exam? Does it connect to other topics?"
+            "explanation": "Write a DETAILED 3-5 sentence explanation. Include: what it is, why it matters, a concrete example from the lecture, and how it connects to other concepts discussed. Write as if explaining to a fellow student who missed class.",
+            "importance": "Explain specifically why this matters: Is it foundational for later topics? Frequently tested? A common exam question? Connects to the textbook chapter?"
         }}
     ],
 
     "definitions": [
         {{
             "term": "Technical term or vocabulary word",
-            "definition": "Clear, concise definition in student-friendly language",
-            "context": "How/where this term was used in the lecture"
+            "definition": "Write a clear 2-3 sentence definition. First sentence: concise definition. Second sentence: clarification or nuance. Third sentence (if needed): what it is NOT or common misconceptions.",
+            "context": "How the professor used this term in the lecture — include the specific example or scenario they described"
         }}
     ],
 
     "studyPoints": [
         {{
-            "point": "Key point or fact to remember",
-            "details": "Supporting details, examples, or elaboration",
-            "examRelevance": "high/medium/low — how likely this is to appear on an exam"
+            "point": "A specific fact, argument, or idea from the lecture that's worth studying",
+            "details": "2-3 sentences of supporting detail: examples given, evidence mentioned, qualifications or exceptions the professor noted",
+            "examRelevance": "high/medium/low"
         }}
     ],
 
     "reviewQuestions": [
-        "Question 1 that tests understanding of the material?",
-        "Question 2 — mix of factual recall and critical thinking?",
-        "Question 3 — application-based question?"
+        "Factual recall: What is X and why is it significant?",
+        "Compare/contrast: How does X differ from Y in terms of Z?",
+        "Application: Given scenario A, how would concept B apply?",
+        "Critical thinking: Why might someone disagree with the argument that X?",
+        "Synthesis: How do concepts X, Y, and Z work together to explain phenomenon W?"
     ],
 
     "examTips": [
         {{
-            "tip": "Specific advice for studying this material",
-            "type": "memorization/understanding/application/comparison"
+            "tip": "Specific, actionable study advice — not generic. Reference actual content from this lecture.",
+            "type": "memorization/understanding/application/comparison/essay-prep"
         }}
     ],
 
     "relatedTopics": [
         {{
-            "topic": "Related topic or concept",
-            "connection": "How it connects to this lecture's content",
-            "suggestedReading": "Chapter, textbook section, or resource to review"
+            "topic": "Related topic or concept from the broader field",
+            "connection": "Specifically how it connects — not just 'it's related' but explain the logical link",
+            "suggestedReading": "Specific chapter, textbook section, Wikipedia article, or academic resource"
         }}
     ],
 
-    "keyTopics": ["Topic 1", "Topic 2", "Topic 3"],
+    "keyTopics": ["Topic 1", "Topic 2", "Topic 3", "Topic 4", "Topic 5"],
 
-    "enhancedTranscript": "A cleaned-up, well-organized version of the lecture content. Remove filler words, fix grammar, organize by topic with clear paragraph breaks. Use headers for major topic shifts. Make it readable as study notes while preserving all the important information the professor shared. This should read like a well-written textbook section, not a raw transcript."
+    "enhancedTranscript": "Rewrite the ENTIRE lecture content as clean, well-structured study notes. This is the LONGEST section and should be several paragraphs.\\n\\n## Section heading for first major topic\\n\\nRewrite what the professor said about this topic in clear, organized prose. Include all important details, examples, and explanations. Fix grammar, remove filler words (um, uh, like, you know), but preserve the substance.\\n\\n## Section heading for second major topic\\n\\nContinue with the next major topic...\\n\\nUse ## headers for major topic shifts. Use proper paragraphs. Preserve ALL important information — this should be comprehensive enough that a student could study entirely from this rewrite. The enhanced transcript should be at least 50% of your total output length."
 }}
 
-IMPORTANT RULES:
-- Generate at least 3-5 key concepts with detailed explanations
-- Generate at least 5-8 definitions/terms
-- Generate at least 5-8 study points with exam relevance ratings
-- Generate at least 5 review questions (mix of types: factual, analytical, application)
-- Generate at least 3 exam tips
-- Generate at least 2 related topics
-- Make ALL content student-friendly — avoid jargon without explanation
-- The enhanced transcript should be significantly cleaned up and reorganized for readability
-- If the lecture is short, extract what you can but still be thorough
-- Output ONLY valid JSON, no other text or markdown fences"""
+CRITICAL OUTPUT RULES:
+- You MUST generate at least 5-8 key concepts with DETAILED 3-5 sentence explanations each
+- You MUST generate at least 8-12 definitions with context
+- You MUST generate at least 8-12 study points with details and exam relevance
+- You MUST generate at least 8-10 review questions (mix: factual, analytical, application, synthesis)
+- You MUST generate at least 5 exam tips with specific advice
+- You MUST generate at least 3-4 related topics with specific reading suggestions
+- The enhancedTranscript MUST be the longest section — rewrite ALL lecture content as organized study notes with ## section headers
+- If the lecture is short (under 5 minutes), still extract maximum value but note it's a brief excerpt
+- For a standard lecture (30-60+ minutes), output should be VERY comprehensive
+- Output ONLY valid JSON, no other text or markdown fences
+- Use \\n for newlines within string values"""
                 },
                 {
                     "role": "user",
@@ -926,7 +929,7 @@ IMPORTANT RULES:
                 }
             ],
             temperature=0.3,
-            max_tokens=4096
+            max_tokens=16000
         )
 
         guide_text = response.choices[0].message.content.strip()
@@ -1020,25 +1023,25 @@ def chat():
             messages=[
                 {
                     "role": "system",
-                    "content": """You are an intelligent meeting analyst for the ClearNote app. You have deep expertise in analyzing meetings and providing actionable insights.
-                    Based on the meeting transcript provided, you can:
-                      - Answer specific questions about what was discussed
-                      - Provide suggestions and recommendations based on the meeting content
-                      - Identify gaps, missing topics, or things that should have been addressed
-                      - Highlight potential risks or concerns raised (or not raised) in the meeting
-                      - Suggest follow-up actions beyond what was explicitly mentioned
-                      - Assess the meeting's effectiveness and flow
-                      - Identify decisions that were made or should have been made
-                      - Offer constructive feedback on communication patterns
-                      - Reference specific speakers and what they said
+                    "content": """You are an intelligent study assistant for the ClearStudyCheck app. You help college students understand their lecture recordings.
+                    Based on the lecture transcript provided, you can:
+                      - Answer specific questions about what was taught
+                      - Explain concepts from the lecture in simpler terms
+                      - Provide additional context or examples for difficult topics
+                      - Help students understand connections between different concepts
+                      - Suggest study strategies for the material covered
+                      - Create practice questions or flashcard-style Q&A
+                      - Clarify confusing parts of the lecture
+                      - Identify the most important points for exam preparation
+                      - Reference specific things the professor/instructor said
 
-                       Be insightful, specific, and always reference actual content from the transcript.
-                       If asked about topics completely unrelated to the meeting (like coding, math, trivia), politely redirect to the meeting content."""
+                       Be helpful, clear, and student-friendly. Use examples and analogies.
+                       If asked about topics completely unrelated to the lecture, politely redirect to the lecture content."""
 
                 },
                 {
                     "role": "user",
-                    "content": f"Meeting Transcript:\n{transcript}\n\nQuestion: {question}"
+                    "content": f"Lecture Transcript:\n{transcript}\n\nStudent Question: {question}"
                 }
             ],
             temperature=0.3,
@@ -1073,7 +1076,8 @@ if __name__ == '__main__':
     print("  POST /transcribe-with-diarization - Transcribe + real speaker ID")
     print("  POST /summarize     - Generate AI summary")
     print("  POST /executive-summary - Executive summary")
-    print("  POST /chat          - Chat with transcript")
+    print("  POST /chat          - Chat with lecture transcript")
+    print("  POST /study-guide   - Generate comprehensive study guide")
     print("="*50 + "\n")
 
     port = int(os.environ.get('PORT', 5000))
