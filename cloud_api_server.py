@@ -1,6 +1,6 @@
 """
-ClearNoteCheck - Cloud API Server
-Lightweight Flask server for OpenAI-powered features (summaries, chat, transcription)
+ClearNoteCheck / ClearStudyCheck - Cloud API Server
+Lightweight Flask server for OpenAI-powered features (summaries, chat, study guides, transcription)
 
 This is the CLOUD version - uses AssemblyAI for transcription with real speaker diarization.
 Supports 2+ hour recordings via chunked upload.
@@ -13,7 +13,8 @@ Endpoints:
     POST /upload/chunk                - Upload a chunk
     POST /upload/complete             - Complete upload and transcribe
     POST /summarize                   - Generate AI summary from transcript
-    POST /executive-summary           - Generate Manager/Executive summary
+    POST /executive-summary           - Generate Manager/Executive summary (ClearNoteCheck)
+    POST /study-guide                 - Generate student study guide (ClearStudyCheck)
     POST /chat                        - Chat with transcript
 
 Environment variables:
@@ -71,6 +72,7 @@ def root():
             'POST /transcribe-with-diarization',
             'POST /summarize',
             'POST /executive-summary',
+            'POST /study-guide',
             'POST /chat'
         ]
     })
@@ -789,6 +791,202 @@ Output ONLY valid JSON, no other text."""
 
     except Exception as e:
         print(f"[API Server] Executive summary error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/study-guide', methods=['POST'])
+def study_guide():
+    """
+    Generate comprehensive study guide from lecture transcript using OpenAI GPT.
+    Used by ClearStudyCheck app to produce student-focused study materials.
+    Returns: overview, keyConcepts, definitions, studyPoints, reviewQuestions,
+             examTips, relatedTopics, keyTopics, enhancedTranscript
+    """
+    try:
+        if not openai_client:
+            return jsonify({
+                'success': False,
+                'error': 'OpenAI API not configured. Set OPENAI_API_KEY environment variable.'
+            }), 503
+
+        data = request.get_json()
+        if not data or 'transcript' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'No transcript provided'
+            }), 400
+
+        transcript = data['transcript']
+        lecture_title = data.get('lectureTitle', 'Lecture')
+        lecture_date = data.get('lectureDate', '')
+        subject = data.get('subject', 'general')
+        class_name = data.get('className', '')
+
+        print(f"[API Server] Generating study guide for: {lecture_title} (subject: {subject})")
+
+        # Build subject-aware context
+        subject_context = ""
+        if subject and subject != 'general':
+            subject_hints = {
+                'biology': "Focus on biological processes, organisms, classifications, lab procedures, and scientific terminology. Format chemical/biological names properly.",
+                'chemistry': "Focus on reactions, equations, molecular structures, mechanisms, and lab safety. Use proper chemical notation.",
+                'physics': "Focus on formulas, laws, derivations, units, and problem-solving approaches. Include relevant equations.",
+                'math_cs': "Focus on theorems, proofs, algorithms, code patterns, and problem-solving steps. Include formulas and notation.",
+                'history': "Focus on dates, events, cause-and-effect relationships, key figures, and primary sources. Build chronological context.",
+                'literature': "Focus on themes, motifs, characters, literary devices, author context, and textual analysis.",
+                'psychology': "Focus on theories, key studies, researchers, statistical methods, and case examples.",
+                'business': "Focus on models, frameworks, case studies, financial concepts, and market analysis.",
+                'nursing_premed': "Focus on anatomy, pharmacology, clinical procedures, patient care, and medical terminology.",
+                'engineering': "Focus on design principles, calculations, material properties, and system analysis.",
+            }
+            subject_context = subject_hints.get(subject, "Extract key academic concepts appropriate to this subject area.")
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""You are an expert study guide creator for college students. Your job is to transform raw lecture transcripts into comprehensive, well-organized study materials that help students learn effectively and prepare for exams.
+
+{f"Subject area: {subject}. {subject_context}" if subject_context else ""}
+
+Given a lecture transcript, produce a JSON response with these sections:
+
+{{
+    "overview": "A clear 3-5 sentence summary of what the lecture covered, written in student-friendly language. Explain the big picture and why this material matters.",
+
+    "keyConcepts": [
+        {{
+            "concept": "Name of the concept",
+            "explanation": "Clear, detailed explanation a student can understand. Use analogies and examples where helpful.",
+            "importance": "Why this concept matters — is it foundational? Will it be on the exam? Does it connect to other topics?"
+        }}
+    ],
+
+    "definitions": [
+        {{
+            "term": "Technical term or vocabulary word",
+            "definition": "Clear, concise definition in student-friendly language",
+            "context": "How/where this term was used in the lecture"
+        }}
+    ],
+
+    "studyPoints": [
+        {{
+            "point": "Key point or fact to remember",
+            "details": "Supporting details, examples, or elaboration",
+            "examRelevance": "high/medium/low — how likely this is to appear on an exam"
+        }}
+    ],
+
+    "reviewQuestions": [
+        "Question 1 that tests understanding of the material?",
+        "Question 2 — mix of factual recall and critical thinking?",
+        "Question 3 — application-based question?"
+    ],
+
+    "examTips": [
+        {{
+            "tip": "Specific advice for studying this material",
+            "type": "memorization/understanding/application/comparison"
+        }}
+    ],
+
+    "relatedTopics": [
+        {{
+            "topic": "Related topic or concept",
+            "connection": "How it connects to this lecture's content",
+            "suggestedReading": "Chapter, textbook section, or resource to review"
+        }}
+    ],
+
+    "keyTopics": ["Topic 1", "Topic 2", "Topic 3"],
+
+    "enhancedTranscript": "A cleaned-up, well-organized version of the lecture content. Remove filler words, fix grammar, organize by topic with clear paragraph breaks. Use headers for major topic shifts. Make it readable as study notes while preserving all the important information the professor shared. This should read like a well-written textbook section, not a raw transcript."
+}}
+
+IMPORTANT RULES:
+- Generate at least 3-5 key concepts with detailed explanations
+- Generate at least 5-8 definitions/terms
+- Generate at least 5-8 study points with exam relevance ratings
+- Generate at least 5 review questions (mix of types: factual, analytical, application)
+- Generate at least 3 exam tips
+- Generate at least 2 related topics
+- Make ALL content student-friendly — avoid jargon without explanation
+- The enhanced transcript should be significantly cleaned up and reorganized for readability
+- If the lecture is short, extract what you can but still be thorough
+- Output ONLY valid JSON, no other text or markdown fences"""
+                },
+                {
+                    "role": "user",
+                    "content": f"{'Class: ' + class_name + chr(10) if class_name else ''}Lecture: {lecture_title}\nDate: {lecture_date}\n\nTranscript:\n{transcript}"
+                }
+            ],
+            temperature=0.3,
+            max_tokens=4096
+        )
+
+        guide_text = response.choices[0].message.content.strip()
+
+        # Parse JSON response
+        try:
+            if guide_text.startswith('```'):
+                guide_text = guide_text.split('```')[1]
+                if guide_text.startswith('json'):
+                    guide_text = guide_text[4:]
+            guide_text = guide_text.strip()
+
+            # Try to extract JSON object if there's extra text
+            json_match = None
+            try:
+                study_guide = json.loads(guide_text)
+            except json.JSONDecodeError:
+                import re
+                match = re.search(r'\{[\s\S]*\}', guide_text)
+                if match:
+                    study_guide = json.loads(match.group())
+                else:
+                    raise ValueError("No JSON found in response")
+
+        except (json.JSONDecodeError, ValueError) as parse_error:
+            print(f"[API Server] JSON parse error, creating structured fallback: {parse_error}")
+            study_guide = {
+                'overview': guide_text[:500] if guide_text else 'Study guide generation failed.',
+                'keyConcepts': [],
+                'definitions': [],
+                'studyPoints': [],
+                'reviewQuestions': [],
+                'examTips': [],
+                'relatedTopics': [],
+                'keyTopics': [],
+                'enhancedTranscript': ''
+            }
+
+        # Ensure all expected fields exist with defaults
+        study_guide.setdefault('overview', '')
+        study_guide.setdefault('keyConcepts', [])
+        study_guide.setdefault('definitions', [])
+        study_guide.setdefault('studyPoints', [])
+        study_guide.setdefault('reviewQuestions', [])
+        study_guide.setdefault('examTips', [])
+        study_guide.setdefault('relatedTopics', [])
+        study_guide.setdefault('keyTopics', [])
+        study_guide.setdefault('enhancedTranscript', '')
+
+        print(f"[API Server] Study guide generated: {len(study_guide.get('keyConcepts', []))} concepts, "
+              f"{len(study_guide.get('definitions', []))} terms, "
+              f"{len(study_guide.get('reviewQuestions', []))} questions")
+
+        return jsonify({
+            'success': True,
+            'studyGuide': study_guide
+        })
+
+    except Exception as e:
+        print(f"[API Server] Study guide error: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
