@@ -1,5 +1,5 @@
-# ClearNoteCheck Cloud API - Requirements
-# Lightweight server for Railway deployment
+# ClearLectureCheck Cloud API - Requirements
+# Flask server for Railway deployment
 
 flask>=2.3.0
 flask-cors>=4.0.0
