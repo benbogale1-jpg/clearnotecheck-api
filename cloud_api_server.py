@@ -1062,6 +1062,119 @@ def chat():
             'error': str(e)
         }), 500
 
+# ============================================
+# Math/Physics/Chemistry Solver (GPT-4o)
+# Used by ClearStudyCheck Math tab
+# ============================================
+ 
+@app.route('/math', methods=['POST'])
+def solve_math():
+    """
+    Solve math, physics, or chemistry problems using GPT-4o.
+    Accepts either LaTeX text input or a base64-encoded image.
+    Returns structured step-by-step solution with explanations.
+    
+    Request JSON: { "latex": "\\int x^2 + 3x \\, dx" }
+           or:    { "image": "<base64 string>" }
+    """
+    try:
+        if not openai_client:
+            return jsonify({
+                'success': False,
+                'error': 'OpenAI API not configured. Set OPENAI_API_KEY environment variable.'
+            }), 503
+ 
+        data = request.json
+        image_b64   = data.get('image', '')
+        latex_input = data.get('latex', '')
+ 
+        if not image_b64 and not latex_input:
+            return jsonify({
+                'success': False,
+                'error': 'No input provided. Send either "latex" or "image" field.'
+            }), 400
+ 
+        SYSTEM_PROMPT = """You are an expert STEM tutor for college students.
+Return ONLY a valid JSON object with no markdown, no backticks, nothing else:
+{
+  "subject": "math" | "physics" | "chemistry",
+  "detected_problem": "clean readable problem string",
+  "answer": "final answer as clean string",
+  "difficulty": "beginner" | "intermediate" | "advanced",
+  "steps": [
+    {
+      "step_number": 1,
+      "title": "Short action title e.g. Apply the power rule to x²",
+      "expression": "The actual math expression for this step e.g. x³/3",
+      "explanation": "2-3 sentences. Name the exact rule or theorem used. Explain WHY it applies here — help the student understand the concept, not just the calculation.",
+      "rule_used": "Name of the rule or theorem e.g. Power rule for integration"
+    }
+  ],
+  "concept_explanation": "3-4 sentences of plain English explaining the underlying concept a student needs to understand to solve this class of problem.",
+  "topics": ["topic1", "topic2", "topic3"]
+}
+CRITICAL RULES:
+- Minimum 4 steps, aim for 5-6 for multi-part problems
+- Every explanation must name the rule AND explain WHY it applies
+- expression must show the actual math for that specific step
+- Steps must build logically from each other
+- concept_explanation must genuinely help a college student understand"""
+ 
+        content = []
+ 
+        if image_b64:
+            print(f"[API Server] Math solver: processing image input ({len(image_b64)} chars)")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+            })
+            content.append({
+                "type": "text",
+                "text": "Solve the math, physics, or chemistry problem shown in this image. Follow the JSON format in the system prompt exactly."
+            })
+        else:
+            print(f"[API Server] Math solver: processing LaTeX input: {latex_input[:100]}")
+            content.append({
+                "type": "text",
+                "text": f"Solve this problem: {latex_input}\nFollow the JSON format in the system prompt exactly."
+            })
+ 
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": content}
+            ],
+            max_tokens=2000
+        )
+ 
+        result_text = response.choices[0].message.content.strip()
+ 
+        # Clean markdown fences if GPT adds them
+        if result_text.startswith('```'):
+            result_text = result_text.split('```')[1]
+            if result_text.startswith('json'):
+                result_text = result_text[4:]
+            result_text = result_text.strip()
+ 
+        result = json.loads(result_text)
+        print(f"[API Server] Math solver: {result.get('subject', 'unknown')} problem solved — {len(result.get('steps', []))} steps")
+ 
+        return jsonify(result)
+ 
+    except json.JSONDecodeError as e:
+        print(f"[API Server] Math solver JSON parse error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to parse GPT-4o response as JSON'
+        }), 500
+    except Exception as e:
+        print(f"[API Server] Math solver error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500        
+
 
 if __name__ == '__main__':
     print("\n" + "="*50)
