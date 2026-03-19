@@ -952,6 +952,73 @@ def upload_complete():
 # Main
 # ============================================
 
+
+
+# ============================================
+# Math/Physics/Chemistry Solver (GPT-4o)
+# Used by ClearStudyCheck Math tab
+# ============================================
+
+@app.route('/math', methods=['POST'])
+def solve_math():
+    try:
+        if not openai_client:
+            return jsonify({'success': False, 'error': 'OpenAI not configured'}), 503
+        data = request.json
+        image_b64 = data.get('image', '')
+        latex_input = data.get('latex', '')
+        if not image_b64 and not latex_input:
+            return jsonify({'success': False, 'error': 'No input provided'}), 400
+        SYSTEM_PROMPT = """You are an expert STEM tutor for college students.
+Return ONLY a valid JSON object with no markdown, no backticks, nothing else:
+{
+  "subject": "math" | "physics" | "chemistry",
+  "detected_problem": "clean readable problem string",
+  "answer": "final answer as clean string",
+  "difficulty": "beginner" | "intermediate" | "advanced",
+  "steps": [
+    {
+      "step_number": 1,
+      "title": "Short action title",
+      "expression": "The actual math expression for this step",
+      "explanation": "2-3 sentences. Name the exact rule or theorem used. Explain WHY it applies here.",
+      "rule_used": "Name of the rule or theorem"
+    }
+  ],
+  "concept_explanation": "3-4 sentences of plain English explaining the underlying concept.",
+  "topics": ["topic1", "topic2", "topic3"]
+}
+CRITICAL RULES:
+- Minimum 4 steps, aim for 5-6 for multi-part problems
+- Every explanation must name the rule AND explain WHY it applies
+- expression must show the actual math for that specific step
+- Steps must build logically from each other
+- concept_explanation must genuinely help a college student understand"""
+        content_list = []
+        if image_b64:
+            print(f"[API Server] Math solver: image input ({len(image_b64)} chars)")
+            content_list.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}})
+            content_list.append({"type": "text", "text": "Solve the problem shown in this image. Follow the JSON format in the system prompt exactly."})
+        else:
+            print(f"[API Server] Math solver: LaTeX input: {latex_input[:100]}")
+            content_list.append({"type": "text", "text": f"Solve this problem: {latex_input}\nFollow the JSON format in the system prompt exactly."})
+        response = openai_client.chat.completions.create(model="gpt-4o", messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content_list}], max_tokens=2000)
+        result_text = response.choices[0].message.content.strip()
+        if result_text.startswith("`"):
+            result_text = result_text.split("`")[1]
+            if result_text.startswith("json"):
+                result_text = result_text[4:]
+            result_text = result_text.strip()
+        result = json.loads(result_text)
+        print(f"[API Server] Math solver: {result.get('subject', 'unknown')} solved")
+        return jsonify(result)
+    except json.JSONDecodeError as e:
+        print(f"[API Server] Math JSON error: {str(e)}")
+        return jsonify({'success': False, 'error': 'Failed to parse response'}), 500
+    except Exception as e:
+        print(f"[API Server] Math error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 if __name__ == '__main__':
     print("\n" + "=" * 50)
     print("ClearLectureCheck Cloud API Server v1.0")
@@ -971,3 +1038,4 @@ if __name__ == '__main__':
 
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
