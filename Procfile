@@ -1,1 +1,1 @@
-web: gunicorn server:app --timeout 660
+web: gunicorn cloud_api_server:app --timeout 660
