@@ -63,7 +63,7 @@ else:
 def root():
     """Root endpoint - API info"""
     return jsonify({
-        'service': 'ClearLectureCheck Cloud API',
+        'service': 'ClearNoteCheck Cloud API',
         'version': '1.0.0',
         'status': 'running',
         'endpoints': [
@@ -85,7 +85,7 @@ def health():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'service': 'ClearLectureCheck Cloud API',
+        'service': 'ClearNoteCheck Cloud API',
         'openai': 'configured' if openai_client else 'not configured',
         'assemblyai': 'configured' if assemblyai_api_key else 'not configured',
         'timestamp': datetime.now().isoformat()
@@ -1021,7 +1021,7 @@ CRITICAL RULES:
 
 if __name__ == '__main__':
     print("\n" + "=" * 50)
-    print("ClearLectureCheck Cloud API Server v1.0")
+    print("ClearNoteCheck Cloud API Server v1.0")
     print("=" * 50)
     print(f"OpenAI: {'Configured' if openai_client else 'NOT CONFIGURED'}")
     print(f"AssemblyAI: {'Configured' if assemblyai_api_key else 'NOT CONFIGURED'}")
