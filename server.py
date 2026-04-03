@@ -124,8 +124,9 @@ def assemblyai_transcribe(audio_path, speaker_labels=False):
     # Step 2: Request transcription
     transcript_request = {
         'audio_url': upload_url,
+        'speech_models': ['universal-3-pro'],
         'speaker_labels': speaker_labels,
-    }
+         }
 
     print(f"[CLC API] Requesting transcription (speaker_labels={speaker_labels})...")
     transcript_response = requests.post(
