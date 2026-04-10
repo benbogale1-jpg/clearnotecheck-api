@@ -726,32 +726,37 @@ def executive_summary():
             messages=[
                 {
                     "role": "system",
-                    "content": """You are an executive assistant preparing meeting summaries for busy managers.
-Given a meeting transcript, produce a JSON response optimized for quick executive review:
+                    "content": 
+"""You are a senior executive assistant and corporate governance specialist preparing professional meeting documentation for C-suite executives and senior management.
+Given a meeting transcript, produce a JSON response following Fortune 500 corporate reporting standards:
 
 {
-    "executiveBrief": "2-3 sentence high-level summary of what was discussed and outcomes",
+    "executiveBrief": "A precise 3-4 sentence executive brief. Sentence 1: What was the purpose of the meeting and who attended. Sentence 2: The single most important outcome or decision. Sentence 3: The critical next step with owner and deadline. Sentence 4: Business impact or risk if action is not taken.",
     "keyDecisions": [
-        {"decision": "What was decided", "impact": "Brief impact/importance", "owner": "Who owns this"}
+        {"decision": "Specific decision made — state exactly what was agreed", "impact": "Quantified business impact where possible (cost, time, revenue, risk)", "owner": "Named individual or team responsible"}
     ],
     "actionItems": [
-        {"task": "What needs to be done", "assignee": "Who", "deadline": "When (if mentioned)", "priority": "high/medium/low"}
+        {"task": "SMART action item — Specific, Measurable, and unambiguous", "assignee": "Named person responsible", "deadline": "Specific date or timeframe mentioned, or Not specified", "priority": "high/medium/low"}
     ],
     "risksAndBlockers": [
-        {"issue": "What's the risk/blocker", "severity": "high/medium/low", "mitigation": "Suggested action"}
+        {"issue": "Specific risk or blocker identified", "severity": "high/medium/low", "mitigation": "Recommended action with suggested owner"}
     ],
-    "nextSteps": ["Immediate next step 1", "Next step 2"],
+    "nextSteps": ["Immediate action 1 with owner", "Immediate action 2 with owner"],
     "followUpMeetings": [
-        {"title": "Suggested meeting title", "purpose": "Why needed", "suggestedAttendees": ["Person 1"], "suggestedTimeframe": "This week/Next week/etc"}
+        {"title": "Specific meeting title", "purpose": "Clear objective", "suggestedAttendees": ["Person 1"], "suggestedTimeframe": "This week/Next week/etc"}
     ],
     "keyMetrics": [
-        {"metric": "Any numbers/KPIs mentioned", "value": "The value", "trend": "up/down/stable"}
+        {"metric": "Any KPI or measurable mentioned", "value": "The actual value", "trend": "up/down/stable"}
     ]
 }
 
-Be concise and action-oriented. Focus on what matters to decision-makers.
-If a field has no relevant content, use an empty array.
-Output ONLY valid JSON, no other text."""
+CRITICAL RULES:
+- Be specific — avoid vague language like discuss further or look into it
+- Always attribute action items to named individuals where mentioned
+- Quantify impact wherever numbers were mentioned
+- If a field has no relevant content use an empty array
+- Output ONLY valid JSON, no other text"""
+
                 },
                 {
                     "role": "user",
@@ -759,7 +764,7 @@ Output ONLY valid JSON, no other text."""
                 }
             ],
             temperature=0.3,
-            max_tokens=2048
+            max_tokens=4096
         )
 
         summary_text = response.choices[0].message.content.strip()
